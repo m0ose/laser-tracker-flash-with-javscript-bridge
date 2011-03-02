@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="utf-8"?>
+<s:Application xmlns:fx="http://ns.adobe.com/mxml/2009" 
+			   xmlns:s="library://ns.adobe.com/flex/spark" 
+			   xmlns:mx="library://ns.adobe.com/flex/mx" minWidth="955" minHeight="600" xmlns:ns1="*">
+	
+	<fx:Script>
+		<![CDATA[
+			import flash.display.Bitmap;
+			import flash.display.BitmapData;
+			import flash.filters.BlurFilter;
+			import flash.media.Camera;
+			import flash.media.Video;
+			import flash.net.URLRequest;
+			import flash.net.navigateToURL;
+			import flash.utils.setTimeout;
+			
+			import flashx.textLayout.formats.Float;
+			
+			import mx.controls.Alert;
+			
+			public function int2gray(n:int):String
+			{
+				return ((n>>1) ^ n).toString(2);
+			}
+			
+			public function gray2bin(n:String):String
+			{
+				var ga:int=bin2int(n);
+				var temp:int=ga^(ga>>8);
+				temp^=(temp>>4);
+				temp^=(temp>>2);
+				temp^=(temp>>1);
+				return temp.toString(2);
+			}
+			
+			public function gray2int(n:String):int
+			{
+				return bin2int(gray2bin(n));
+			}
+			
+			public function bin2int(n:String):int
+			{
+				return parseInt(n,2);
+			}
+			
+			public function pixelBrightness(p:int):int
+			{
+				return (300*((p>>16)&255) + 500*((p>>8)&255) + 100*(p&255));
+			}
+			
+			public function pixelRed(p:int):int
+			{
+				return (p>>16)&255;
+			}
+			
+			[Bindable]
+			public var 	cam:Camera=Camera.getCamera(),
+				camVid:Video,
+				GFrame:BitmapData,
+				BFrame:BitmapData,
+				WFrame:BitmapData,
+				HLines:Array=new Array(),
+				VLines:Array=new Array(),
+				pointMap:Array,
+				grayCodeV:Array,
+				grayCodeH:Array,
+				drawTarget:BitmapData,
+				webcamFrame:BitmapData,
+				webcamFrameBefore:BitmapData,
+				webcamBrightnessFrame:BitmapData,
+				webcamBounds:BitmapData,
+				curdigit:int=0,
+				maxDigits:int,
+				interval:int=250,
+				snapshotInterval:int=300,
+				captureInterval:int=30,
+				lpx:int,
+				lpy:int;
+			
+			
+			public function init():void
+			{
+				cam = _cam_picker.camera;
+				camVid = _cam_picker.video;
+				//cam.setMode(320,240,60);
+				drawTarget=new BitmapData(drawArea.width,drawArea.height);
+				webcamFrame=new BitmapData(cam.width,cam.height);
+				webcamFrameBefore=new BitmapData(cam.width,cam.height);
+				webcamBrightnessFrame=new BitmapData(cam.width,cam.height);
+				webcamBounds=new BitmapData(cam.width,cam.height);
+				maxDigits=int2gray(drawArea.width).length;
+				
+				//webcamDisplay.attachCamera(cam);
+				//webcamDisplay.width=cam.width;
+				//webcamDisplay.height=cam.height;
+				
+				calibrateCanvas.source=new BitmapData(calibrateCanvas.width,calibrateCanvas.height,false,0x000000);
+				
+				grayFrame();
+			}
+			
+			
+			public function grayFrame():void
+			{
+				drawTarget.draw(new BitmapData(drawTarget.width,drawTarget.height,false,0xFF808080));
+				calibrateCanvas.source=new Bitmap(drawTarget);
+				setTimeout(takeSnapshot,snapshotInterval*2,0);
+				setTimeout(whiteFrame,interval*2);
+			}
+			
+			
+			public function whiteFrame():void
+			{
+				drawTarget.draw(new BitmapData(drawTarget.width,drawTarget.height,false,0xFFFFFFFF));
+				calibrateCanvas.source=new Bitmap(drawTarget);
+				setTimeout(takeSnapshot,snapshotInterval,1);
+				setTimeout(blackFrame,interval);
+			}
+			
+			
+			public function blackFrame():void
+			{
+				drawTarget.draw(new BitmapData(drawTarget.width,drawTarget.height,false,0xFF000000));
+				calibrateCanvas.source=new Bitmap(drawTarget);
+				setTimeout(takeSnapshot,snapshotInterval,2);
+				setTimeout(HLineFrame,interval);
+			}
+			
+			
+			public function HLineFrame():void
+			{
+				var figure:Shape=new Shape();
+				figure.graphics.lineStyle(0,0xFF000000);
+				
+				for (var i:int=0; i<drawTarget.height; i++){
+					var gray:String=int2gray(i),
+						idx:String;
+					
+					if(curdigit<gray.length && curdigit>=0){idx=gray.charAt(gray.length-curdigit-1);}
+					else{idx="0";}
+					
+					if(idx=="1"){
+						figure.graphics.moveTo(0,i);
+						figure.graphics.lineTo(drawTarget.width,i);
+					}
+				}
+				var bg:BitmapData=new BitmapData(drawTarget.width,drawTarget.height,false,0xFFFFFFFF);
+				bg.draw(figure);
+				drawTarget.draw(bg);
+				
+				setTimeout(takeSnapshot,snapshotInterval,3);
+				
+				curdigit++;
+				if(curdigit>maxDigits){curdigit=0; setTimeout(VLineFrame,interval);}
+				else{setTimeout(HLineFrame,interval);}
+				calibrateCanvas.source=new Bitmap(drawTarget);
+			}
+			
+			
+			public function VLineFrame():void
+			{
+				var figure:Shape=new Shape();
+				figure.graphics.lineStyle(0,0xFF000000);
+				
+				for (var i:int=0; i<drawTarget.width; i++){
+					var gray:String=int2gray(i),
+						idx:String;
+					
+					if(curdigit<gray.length && curdigit>=0){idx=gray.charAt(gray.length-curdigit-1);}
+					else{idx="0";}
+					
+					if(idx=="1"){
+						figure.graphics.moveTo(i,0);
+						figure.graphics.lineTo(i,drawTarget.height);
+					}
+				}
+				var bg:BitmapData=new BitmapData(drawTarget.width,drawTarget.height,false,0xFFFFFFFF);
+				bg.draw(figure);
+				drawTarget.draw(bg);
+				
+				setTimeout(takeSnapshot,snapshotInterval,4);
+				
+				curdigit++;
+				if(curdigit>maxDigits+1){curdigit=0; createPointMap();}
+				else{setTimeout(VLineFrame,interval);}
+				calibrateCanvas.source=new Bitmap(drawTarget);
+			}
+			
+			
+			public function takeSnapshot(ind:int):void
+			{
+				webcamFrame.draw(camVid);
+				switch(ind){
+					case 0:
+						GFrame=webcamFrame.clone();
+						break;
+					case 1:
+						WFrame=webcamFrame.clone();
+						break;
+					case 2:
+						BFrame=webcamFrame.clone();
+						break;
+					case 3:
+						HLines.push(webcamFrame.clone());
+						break;
+					case 4:
+						VLines.push(webcamFrame.clone());
+						break;
+					default:
+						break;
+				}
+			}
+			
+			
+			public function createPointMap():void
+			{
+				BFrame.merge(WFrame,WFrame.rect,new Point(0,0),0x80,0x80,0x80,0xFF);
+				GFrame.merge(BFrame,BFrame.rect,new Point(0,0),0x80,0x80,0x80,0xFF);
+				grayCodeV=new Array(VLines.length);
+				grayCodeH=new Array(HLines.length);
+				pointMap=new Array(cam.width);
+				for(var n:int=0; n<VLines.length; n++){
+					grayCodeV[n]=new Array(cam.width);
+					grayCodeH[n]=new Array(cam.height);
+					for(var x:int=0; x<cam.width; x++){
+						grayCodeV[n][x]=new Array(cam.height);
+						grayCodeH[n][x]=new Array(cam.height);
+						pointMap[x]=new Array(cam.height);
+					}
+				}
+				
+				for(n=0; n<VLines.length; n++){
+					for(x=0; x<cam.width; x++){
+						for(var y:int=0; y<cam.height; y++){
+							grayCodeV[n][x][y]=pixelBrightness(VLines[n].getPixel(x,y))>pixelBrightness(GFrame.getPixel(x,y)) ? 0:1;
+							grayCodeH[n][x][y]=pixelBrightness(HLines[n].getPixel(x,y))>pixelBrightness(GFrame.getPixel(x,y)) ? 0:1;
+						}
+					}
+				}
+				
+				var strX:String="",
+					strY:String="";
+				for(x=0; x<cam.width; x++){
+					for(y=0; y<cam.height; y++){
+						strX="";
+						strY="";
+						for(n=0; n<VLines.length; n++){
+							strX=(pixelBrightness(VLines[n].getPixel(x,y))>pixelBrightness(GFrame.getPixel(x,y)) ? 0:1)+""+strX;
+							strY=(pixelBrightness(HLines[n].getPixel(x,y))>pixelBrightness(GFrame.getPixel(x,y)) ? 0:1)+""+strY;
+						}
+						pointMap[x][y]=new Point(gray2int(strX),gray2int(strY));
+					}
+				}
+				
+				calibrateCanvas.visible=false;
+				_cam_picker.stopDisplay();
+				if (ExternalInterface.available){
+					ExternalInterface.call("calibrateDone");
+				}
+				
+				trackLaser();
+			}
+			
+			
+			public function webcamFrameUpdate():void{
+				webcamFrame.draw(camVid,null,null,"normal");
+				webcamFrame.draw(webcamFrameBefore,null,null,"difference");
+				webcamFrame.colorTransform(webcamFrame.rect,new ColorTransform(8.0,8.0,8.0,1.0,-512,-512,-512,0));
+				webcamFrame.applyFilter(webcamFrame,webcamFrame.rect,webcamFrame.rect.topLeft,new BlurFilter(1,1,1));
+				webcamFrame.threshold(webcamFrame,webcamFrame.rect,webcamFrame.rect.topLeft,">",0xFF010101,0x00FFFFFF,0x00000000,false);
+				
+				webcamFrameBefore.draw(camVid);
+			}
+			
+			
+			public function trackLaser():void
+			{
+				webcamFrameUpdate();
+				var maxBright:int=pixelBrightness(0xDEDEDE),
+					brightness:int=0,
+					red:int=0,
+					maxBrightX:int=0,
+					maxBrightY:int=0,
+					webcamMerge:BitmapData=webcamFrame.clone(),
+					lineBrush:Shape=new Shape();
+				
+				webcamMerge.merge(webcamFrameBefore,webcamFrameBefore.rect,new Point(0,0),0x80,0x80,0x80,1);
+				
+				for(var i:int=0; i<cam.width; i++){
+					for(var j:int=0; j<cam.height; j++){
+						brightness=pixelBrightness(webcamMerge.getPixel(i,j));
+						//red=pixelRed(webcamMerge.getPixel(i,j));
+						
+						//Below are various methods for determining the brightest pixel.
+						//if(red==255){ //If red channel is maxed out (typical side effect of laser pointer)
+						if(brightness>maxBright){ //If perceived luminance is the largest so far (a weighted add of r,g, and b vals).
+							maxBright=brightness;
+							maxBrightX=i;
+							maxBrightY=j;
+						}
+					}
+				}	
+				
+				if(maxBright==pixelBrightness(0xDEDEDE)){setTimeout(trackLaser,captureInterval); return;}
+				
+				lpx=pointMap[maxBrightX][maxBrightY].x;
+				lpy=pointMap[maxBrightX][maxBrightY].y;
+				
+				drawTarget.fillRect(drawTarget.rect,0x000000);
+				drawTarget.setPixel(lpx,lpy,0xFFFFFF);
+				drawTarget.setPixel(lpx-1,lpy,0xFFFFFF);
+				drawTarget.setPixel(lpx+1,lpy,0xFFFFFF);
+				drawTarget.setPixel(lpx,lpy-1,0xFFFFFF);
+				drawTarget.setPixel(lpx,lpy+1,0xFFFFFF);
+				
+				drawArea.source=new Bitmap(drawTarget);
+				
+				if(ExternalInterface.available && lpx<=drawArea.width && lpy<=drawArea.height){
+					ExternalInterface.call("laserPointer",lpx/drawArea.width,lpy/drawArea.height);
+				}
+				
+				setTimeout(trackLaser,captureInterval);
+			}
+		]]>
+	</fx:Script>
+	
+	
+
+	<s:BitmapImage id="drawArea" x="0" y="0" width="100%" height="100%"></s:BitmapImage>
+
+	<ns1:camDisplay x="10" y="19" id="_cam_picker">
+	</ns1:camDisplay>
+	<s:Button x="349" y="376" label="START TRACKING" width="337" height="127" click="init()"/>
+	<s:BitmapImage x="0" y="0" id="calibrateCanvas" width="100%" height="100%"></s:BitmapImage>
+
+</s:Application>
